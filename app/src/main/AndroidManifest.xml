@@ -13,11 +13,17 @@
         <service
             android:name=".LabService"
             android:enabled="true"
+            android:process=".LabServiceProcess"
             android:exported="true">
             <intent-filter>
                 <category android:name="android.intent.category.DEFAULT" />
                 <action android:name="ru.anfilek.myapplication.ACTION1"/>
             </intent-filter>
+        </service>
+
+        <service
+            android:name=".MessengerService"
+            android:process=".MessengerService">
         </service>
 
         <service

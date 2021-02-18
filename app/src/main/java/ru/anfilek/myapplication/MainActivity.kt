@@ -1,14 +1,17 @@
 package ru.anfilek.myapplication
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.os.*
 import android.provider.MediaStore
 import android.util.Log
+import android.widget.Toast
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AppCompatActivity
 import androidx.work.*
+import ru.androidlab.aidllab.IRemoteService
 import ru.anfilek.myapplication.databinding.ActivityMainBinding
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -16,33 +19,97 @@ import java.util.concurrent.TimeUnit
 
 class MainActivity : AppCompatActivity() {
 
-    private var bound: Boolean = false
-    private var binder: LabService.LabBinder? = null
-
-    private var requestId: UUID? = null
-
     companion object {
         private const val TAG = "MainActivityTAG"
+        const val MSG_SAVED_WHAT = 1
     }
 
-    private val serviceConnection: ServiceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            Log.d(TAG, "onServiceConnected")
-            binder as LabService.LabBinder
-            val service = binder.getService()
+    //    ------------------  AIDL LAB ------------------
+    private var remoteService: IRemoteService? = null
+    private var remoteServiceConnected: Boolean = false
 
-            this@MainActivity.binder = binder
-            this@MainActivity.binder?.doSomething()
-            bound = true
+    private val remoteServiceConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            Log.d(TAG, "IRemoteService onServiceConnected")
+
+            remoteService = IRemoteService.Stub.asInterface(binder)
+            remoteServiceConnected = true
+            logText("connected to remote service")
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            Log.d(TAG, "onServiceDisconnected")
+            Log.d(TAG, "IRemoteService onServiceDisconnected")
 
-            binder = null
-            bound = false
+            remoteService = null
+            remoteServiceConnected = false
+            logText("disconnected from remote service")
         }
     }
+
+    private fun bindToRemoteService() {
+        val intent = Intent()
+        intent.setClassName("ru.androidlab.aidllab", "ru.androidlab.aidllab.RemoteService")
+        bindService(intent, remoteServiceConnection, Context.BIND_AUTO_CREATE)
+    }
+
+    private fun unbindFromRemoteService() {
+        if (remoteServiceConnected) unbindService(remoteServiceConnection)
+    }
+
+    private fun getPid() {
+        showToast("get Pid From remote: ${remoteService?.pid}")
+    }
+
+    private fun sendLongRequest() {
+        // call oneway function
+        logText("Call one way function")
+        remoteService?.basicTypes(1, 2L, true, 0.5F, 0.6, "String")
+        logText("AFTER Call one way function")
+
+        showToast("send long request to remote")
+    }
+    //    -----------------  AIDL LAB end ---------------
+
+    //    ------------------  Messenger LAB -----------------
+    private var messengerBound: Boolean = false
+    private var messenger: Messenger? = null
+
+    private val messengerServiceConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            Log.d(TAG, "messengerServiceConnection onServiceConnected")
+
+            messenger = Messenger(binder)
+            messengerBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d(TAG, "messengerServiceConnection onServiceDisconnected")
+
+            messenger = null
+            messengerBound = false
+        }
+    }
+
+    private fun bindWithMessenger() {
+        Intent(this, MessengerService::class.java).also { intent ->
+            bindService(intent, messengerServiceConnection, Context.BIND_AUTO_CREATE)
+        }
+    }
+
+    private fun sendMessage() {
+        val message = Message.obtain().apply { what = MSG_SAY_HELLO }
+        message.replyTo = activityMessenger
+        messenger?.let {
+            it.send(message)
+            logText("sendMessage: $message}")
+        } ?: showToast("Unable to send message: messenger is null")
+    }
+    //    ---------------  Messenger LAB end ---------------
+
+    //    ------------------  SERVICE LAB ------------------
+    private var bound: Boolean = false
+    private var binder: LabService.LabBinder? = null
+    private var requestId: UUID? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -83,10 +150,53 @@ class MainActivity : AppCompatActivity() {
             cancelWork.setOnClickListener {
                 cancelWork()
             }
+
+            bindMessenger.setOnClickListener {
+                bindWithMessenger()
+            }
+
+            sendMessage.setOnClickListener {
+                sendMessage()
+            }
+
+            bindRemote.setOnClickListener {
+                bindToRemoteService()
+            }
+
+            unbindRemote.setOnClickListener {
+                unbindFromRemoteService()
+            }
+
+            getPid.setOnClickListener {
+                getPid()
+            }
+
+            longRun.setOnClickListener {
+                sendLongRequest()
+            }
         }
         if (Build.VERSION.SDK_INT >= 24)
             scheduleNewPhotoWork()
 
+    }
+
+    private val serviceConnection: ServiceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            Log.d(TAG, "onServiceConnected")
+            binder as LabService.LabBinder
+            val service = binder.getService()
+
+            this@MainActivity.binder = binder
+            this@MainActivity.binder?.doSomething()
+            bound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            Log.d(TAG, "onServiceDisconnected")
+
+            binder = null
+            bound = false
+        }
     }
 
     private fun startLabService() {
@@ -102,7 +212,6 @@ class MainActivity : AppCompatActivity() {
         Intent(this, LabService::class.java).also { intent ->
             bindService(intent, serviceConnection, BIND_AUTO_CREATE)
         }
-
     }
 
     private fun unbindLabService() {
@@ -125,7 +234,6 @@ class MainActivity : AppCompatActivity() {
     private fun startJobIntentService() {
         LabJobIntentService.enqueueWork(this)
     }
-
 
     private fun enqueueWork() {
 
@@ -179,4 +287,21 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         Log.d(TAG, "on Destroy")
     }
+
+    private val activityMessenger by lazy {
+        Messenger(object : Handler(Looper.getMainLooper()) {
+            override fun handleMessage(msg: Message) {
+                when (msg.what) {
+                    MSG_SAVED_WHAT -> {
+                        showToast("Message was saved, arg1: ${msg.arg1}")
+                    }
+                    else -> logText("else was put into the messenger")
+                }
+            }
+        })
+    }
+
+    private fun showToast(text: String) = Toast.makeText(this, text, Toast.LENGTH_SHORT).show()
+
+    private fun logText(text: String) = Log.d(TAG, text)
 }
